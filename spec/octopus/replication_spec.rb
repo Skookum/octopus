@@ -42,7 +42,11 @@ describe 'when the database is replicated' do
           expect(Cat.find(cat3.id).id).to eq(cat3.id)
           expect(Cat.find(cat3.id).id).to eq(cat3.id)
 
-          expect(counter.query_count).to eq(14)
+          # Rails 5.1 count the cached queries as regular queries.
+          # TODO: How we can verify if the queries are using cache on Rails 5.1? - @thiagopradi
+          expected_records = Octopus.rails51? ? 19 : 14
+
+          expect(counter.query_count).to eq(expected_records)
         end
       end
     end
@@ -121,6 +125,17 @@ describe 'when the database is replicated and the entire application is replicat
       expect(Cat.connection.current_shard).to eql(:master)
       Cat.where(:rubbish => true)
       expect(Cat.connection.current_shard).to eql(:master)
+    end
+  end
+
+  it 'should reset current shard if slave throws an exception with custom master' do
+    OctopusHelper.using_environment :production_fully_replicated do
+      Octopus.config[:master_shard] = :slave2
+      Cat.create!(:name => 'Slave Cat')
+      expect(Cat.connection.current_shard).to eql(:slave2)
+      Cat.where(:rubbish => true)
+      expect(Cat.connection.current_shard).to eql(:slave2)
+      Octopus.config[:master_shard] = nil
     end
   end
 end

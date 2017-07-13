@@ -12,11 +12,20 @@ describe Octopus::RelationProxy do
       expect(@relation.current_shard).to eq(:canada)
     end
 
-    unless Octopus.rails3?
-      it 'can define collection association with the same name as ancestor private method' do
-        @client.comments << Comment.using(:canada).create!(open: true)
-        expect(@client.comments.open).to be_a_kind_of(ActiveRecord::Relation)
-      end
+    it 'can define collection association with the same name as ancestor private method' do
+      @client.comments << Comment.using(:canada).create!(open: true)
+      expect(@client.comments.open).to be_a_kind_of(ActiveRecord::Relation)
+    end
+
+    it 'can be dumped and loaded' do
+      expect(Marshal.load(Marshal.dump(@relation))).to eq @relation
+    end
+
+    it 'maintains the current shard when using where.not(...)' do
+      where_chain = @relation.where
+      expect(where_chain.current_shard).to eq(@relation.current_shard)
+      not_relation = where_chain.not("1=0")
+      expect(not_relation.current_shard).to eq(@relation.current_shard)
     end
 
     context 'when comparing to other Relation objects' do
@@ -29,26 +38,28 @@ describe Octopus::RelationProxy do
       end
     end
 
-    if Octopus.rails4?
-      context 'under Rails 4' do
-        it 'is an Octopus::RelationProxy' do
-          expect{@relation.ar_relation}.not_to raise_error
-        end
+    it "can deliver methods in ActiveRecord::Batches correctly" do
+      expect { @relation.find_each(&:inspect) }.not_to raise_error
+    end
 
-        it 'should be able to return its ActiveRecord::Relation' do
-          expect(@relation.ar_relation.is_a?(ActiveRecord::Relation)).to be true
-        end
+    context 'under Rails 4' do
+      it 'is an Octopus::RelationProxy' do
+        expect{@relation.ar_relation}.not_to raise_error
+      end
 
-        it 'is equal to an identically-defined, but different, RelationProxy' do
-          i = @client.items
-          expect(@relation).to eq(i)
-          expect(@relation.__id__).not_to eq(i.__id__)
-        end
+      it 'should be able to return its ActiveRecord::Relation' do
+        expect(@relation.ar_relation.is_a?(ActiveRecord::Relation)).to be true
+      end
 
-        it 'is equal to its own underlying ActiveRecord::Relation' do
-          expect(@relation).to eq(@relation.ar_relation)
-          expect(@relation.ar_relation).to eq(@relation)
-        end
+      it 'is equal to an identically-defined, but different, RelationProxy' do
+        i = @client.items
+        expect(@relation).to eq(i)
+        expect(@relation.__id__).not_to eq(i.__id__)
+      end
+
+      it 'is equal to its own underlying ActiveRecord::Relation' do
+        expect(@relation).to eq(@relation.ar_relation)
+        expect(@relation.ar_relation).to eq(@relation)
       end
     end
 
@@ -68,14 +79,23 @@ describe Octopus::RelationProxy do
       it 'uses the correct shard' do
         expect(Item.using(:brazil).count).to eq(0)
         _clients_on_brazil = Client.using(:brazil).all
-        Client.using(:brazil) do
+        Octopus.using(:brazil) do
           expect(@relation.count).to eq(1)
+        end
+      end
+
+      it 'uses the correct shard in block when method_missing is triggered on CollectionProxy objects' do
+        Octopus.using(:brazil) do
+          @client.items.each do |item|
+            expect(item.current_shard).to eq(:canada)
+            expect(ActiveRecord::Base.connection.current_shard).to eq(:brazil)
+          end
         end
       end
 
       it 'lazily evaluates on the correct shard' do
         expect(Item.using(:brazil).count).to eq(0)
-        Client.using(:brazil) do
+        Octopus.using(:brazil) do
           expect(@relation.select(:client_id).count).to eq(1)
         end
       end

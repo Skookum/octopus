@@ -2,6 +2,10 @@ require 'spec_helper'
 
 describe Octopus::Model do
   describe '#using method' do
+    it 'raise when Model#using receives a block' do
+      expect { User.using(:master) { true } }.to raise_error(Octopus::Exception, /User\.using is not allowed to receive a block/)
+    end
+
     it 'should allow to send a block to the master shard' do
       Octopus.using(:master) do
         User.create!(:name => 'Block test')
@@ -14,6 +18,16 @@ describe Octopus::Model do
       User.using('canada').create!(:name => 'Rafael Pilha')
 
       expect(User.using('canada').find_by_name('Rafael Pilha')).not_to be_nil
+    end
+
+    it 'should allow comparison of a string shard name with symbol shard name' do
+      u = User.using('canada').create!(:name => 'Rafael Pilha')
+      expect(u).to eq(User.using(:canada).find_by_name('Rafael Pilha'))
+    end
+
+    it 'should allow comparison of a symbol shard name with string shard name' do
+      u = User.using(:canada).create!(:name => 'Rafael Pilha')
+      expect(u).to eq(User.using('canada').find_by_name('Rafael Pilha'))
     end
 
     it 'should allow to pass a string as the shard name to a block' do
@@ -76,9 +90,24 @@ describe Octopus::Model do
         Octopus.using(:canada) do
           fail 'Some Exception'
         end
-      end.to raise_error
+      end.to raise_error(RuntimeError)
 
       expect(ActiveRecord::Base.connection.current_shard).to eq(:master)
+    end
+
+    it 'should ensure that the connection will be cleaned with custom master' do
+      OctopusHelper.using_environment :octopus do
+        Octopus.config[:master_shard] = :brazil
+        expect(ActiveRecord::Base.connection.current_shard).to eq(:brazil)
+        expect do
+          Octopus.using(:canada) do
+            fail 'Some Exception'
+          end
+        end.to raise_error(RuntimeError)
+
+        expect(ActiveRecord::Base.connection.current_shard).to eq(:brazil)
+        Octopus.config[:master_shard] = nil
+      end
     end
 
     it 'should allow creating more than one user' do
@@ -97,6 +126,15 @@ describe Octopus::Model do
     it 'should clean #current_shard from proxy when using execute' do
       User.using(:canada).connection.execute('select * from users limit 1;')
       expect(User.connection.current_shard).to eq(:master)
+    end
+
+    it 'should clean #current_shard from proxy when using execute' do
+      OctopusHelper.using_environment :octopus do
+        Octopus.config[:master_shard] = :brazil
+        User.using(:canada).connection.execute('select * from users limit 1;')
+        expect(User.connection.current_shard).to eq(:brazil)
+        Octopus.config[:master_shard] = nil
+      end
     end
 
     it 'should allow scoping dynamically' do
@@ -254,13 +292,18 @@ describe Octopus::Model do
       u = User.using(:postgresql_shard).create!(:name => 'PostgreSQL User')
       expect(User.using(:postgresql_shard).all).to eq([u])
       expect(User.using(:alone_shard).all).to eq([])
-      User.connection_handler.connection_pools['ActiveRecord::Base'] = User.connection.instance_variable_get(:@shards)[:master]
     end
   end
 
   describe 'AR basic methods' do
     it 'establish_connection' do
       expect(CustomConnection.connection.current_database).to eq('octopus_shard_2')
+    end
+
+    it 'reuses parent model connection' do
+      klass = Class.new(CustomConnection)
+
+      expect(klass.connection).to be klass.connection
     end
 
     it 'should not mess with custom connection table names' do
@@ -431,6 +474,34 @@ describe Octopus::Model do
 
       expect(User.using(:brazil).count).to eq(1)
       expect(User.using(:master).count).to eq(1)
+    end
+
+    describe "#finder methods" do
+      before(:each) do
+        @user1 = User.using(:brazil).create!(:name => 'User1')
+        @user2 = User.using(:brazil).create!(:name => 'User2')
+        @user3 = User.using(:brazil).create!(:name => 'User3')
+      end
+
+      it "#find_each should work" do
+        result_array = []
+
+        User.using(:brazil).where("name is not NULL").find_each do |user|
+          result_array << user
+        end
+
+        expect(result_array).to eq([@user1, @user2, @user3])
+      end
+
+      it "#find_in_batches, should work" do
+        result_array = []
+
+        User.using(:brazil).where("name is not NULL").find_in_batches(batch_size: 1) do |user|
+          result_array << user
+        end
+
+        expect(result_array).to eq([[@user1], [@user2], [@user3]])
+      end
     end
 
     describe 'deleting a record' do
@@ -622,20 +693,21 @@ describe Octopus::Model do
     it 'should work correctly when using validations' do
       @key = Keyboard.create!(:name => 'Key')
       expect { Keyboard.using(:brazil).create!(:name => 'Key') }.not_to raise_error
-      expect { Keyboard.create!(:name => 'Key') }.to raise_error
+      expect { Keyboard.create!(:name => 'Key') }.to raise_error(ActiveRecord::RecordInvalid)
     end
 
     it 'should work correctly when using validations with using syntax' do
       @key = Keyboard.using(:brazil).create!(:name => 'Key')
       expect { Keyboard.create!(:name => 'Key') }.not_to raise_error
-      expect { Keyboard.using(:brazil).create!(:name => 'Key') }.to raise_error
+      expect { Keyboard.using(:brazil).create!(:name => 'Key') }
+        .to raise_error(ActiveRecord::RecordInvalid)
     end
   end
 
   describe '#replicated_model method' do
     it 'should be replicated' do
       OctopusHelper.using_environment :production_replicated do
-        expect(ActiveRecord::Base.connection_proxy.instance_variable_get(:@replicated)).to be true
+        expect(ActiveRecord::Base.connection_proxy.replicated).to be true
       end
     end
 

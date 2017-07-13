@@ -9,20 +9,16 @@ module Octopus
     end
 
     module SharedMethods
-      def clean_table_name
-        return unless connection_proxy.should_clean_table_name?
+      def using(shard)
+        if block_given?
+          raise Octopus::Exception, <<-EOF
+#{name}.using is not allowed to receive a block, it works just like a regular scope.
 
-        if self != ActiveRecord::Base && self.respond_to?(:reset_table_name) && !custom_octopus_table_name
-          reset_table_name
+If you are trying to scope everything to a specific shard, use Octopus.using instead.
+          EOF
         end
 
-        reset_column_information
-        instance_variable_set(:@quoted_table_name, nil)
-      end
-
-      def using(shard)
         if Octopus.enabled?
-          clean_table_name
           Octopus::ScopeProxy.new(shard, self)
         else
           self
@@ -37,18 +33,13 @@ module Octopus
         base.send(:alias_method, :equality_without_octopus, :==)
         base.send(:alias_method, :==, :equality_with_octopus)
         base.send(:alias_method, :eql?, :==)
-        base.send(:alias_method_chain, :perform_validations, :octopus)
+        base.send(:alias_method, :perform_validations_without_octopus, :perform_validations)
+        base.send(:alias_method, :perform_validations, :perform_validations_with_octopus)
       end
 
       def set_current_shard
         return unless Octopus.enabled?
-
-        if new_record? || self.class.connection_proxy.block
-          shard = self.class.connection_proxy.current_shard
-        else
-          shard = self.class.connection_proxy.last_current_shard || self.class.connection_proxy.current_shard
-        end
-
+        shard = self.class.connection_proxy.current_shard
         self.current_shard = shard if self.class.allowed_shard?(shard)
       end
 
@@ -57,7 +48,7 @@ module Octopus
       end
 
       def equality_with_octopus(comparison_object)
-        equality_without_octopus(comparison_object) && comparison_object.current_shard == current_shard
+        equality_without_octopus(comparison_object) && comparison_object.current_shard.to_s == current_shard.to_s
       end
 
       def perform_validations_with_octopus(*args)
@@ -98,17 +89,25 @@ module Octopus
         around_save :run_on_shard, :unless => lambda { self.class.custom_octopus_connection }
         after_initialize :set_current_shard
 
+        class_attribute :custom_octopus_connection
+
         class << self
-          attr_accessor :custom_octopus_connection
           attr_accessor :custom_octopus_table_name
 
-          alias_method_chain :connection, :octopus
-          alias_method_chain :connection_pool, :octopus
-          alias_method_chain :clear_all_connections!, :octopus
-          alias_method_chain :clear_active_connections!, :octopus
-          alias_method_chain :connected?, :octopus
+          alias_method :connection_without_octopus, :connection
+          alias_method :connection, :connection_with_octopus
 
-          alias_method_chain(:set_table_name, :octopus) if Octopus.rails3?
+          alias_method :connection_pool_without_octopus, :connection_pool
+          alias_method :connection_pool, :connection_pool_with_octopus
+
+          alias_method :clear_all_connections_without_octopus!, :clear_all_connections!
+          alias_method :clear_all_connections!, :clear_all_connections_with_octopus!
+
+          alias_method :clear_active_connections_without_octopus!, :clear_active_connections!
+          alias_method :clear_active_connections!, :clear_active_connections_with_octopus!
+
+          alias_method :connected_without_octopus?, :connected?
+          alias_method :connected?, :connected_with_octopus?
 
           def table_name=(value = nil)
             self.custom_octopus_table_name = true

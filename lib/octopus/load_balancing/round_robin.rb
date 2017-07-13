@@ -6,12 +6,13 @@ module Octopus
   module LoadBalancing
     class RoundRobin
       def initialize(slaves_list)
+        raise Octopus::Exception.new("No slaves available") if slaves_list.empty?
         @slaves_list = slaves_list
         @slave_index = 0
       end
 
       # Returns the next available slave in the pool
-      def next
+      def next(options)
         @slaves_list[@slave_index = (@slave_index + 1) % @slaves_list.length]
       end
     end

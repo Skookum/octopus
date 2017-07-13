@@ -11,13 +11,17 @@ module Octopus
 
     attr_accessor :klass
 
+    # Dup and clone should be delegated to the class.
+    # We want to dup the query, not the scope proxy.
+    delegate :dup, :clone, to: :klass
+
     def initialize(shard, klass)
       @current_shard = shard
       @klass = klass
     end
 
     def using(shard)
-      fail "Nonexistent Shard Name: #{shard}" if @klass.connection.instance_variable_get(:@shards)[shard].nil?
+      fail "Nonexistent Shard Name: #{shard}" if @klass.connection.shards[shard].nil?
       @current_shard = shard
       self
     end
